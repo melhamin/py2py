@@ -1,5 +1,4 @@
 from datetime import datetime
-from Peer import client_routine
 import sys
 import socket
 from _thread import *
@@ -11,6 +10,7 @@ BASE_PORT = 60000
 BUFF_SIZE = 256
 RES_OK = 'OK'
 RES_INVALID = 'INVALID'
+SLEEP_TIME = 5
 
 
 class Peer:
@@ -19,7 +19,7 @@ class Peer:
         self.pid = pid
         self.peers = self.get_peers2_connect()
         self.connections: list[socket.socket] = []
-        self.run()
+        self.forwarded_msgs: dict[str] = {}
 
     def run(self):
         threading.Thread(target=self.server).start()
@@ -30,31 +30,31 @@ class Peer:
         address = (ADDRESS, BASE_PORT + self.pid)
         sock.bind(address)
         sock.listen(1)
-        print(f'[+] Peer {self.pid} is listening...')
+        print(f'[SERVER {self.pid}] started...')
 
         while True:
             conn, addr = sock.accept()
-            print(f'[+] Connected to {addr}.')
+            print(f'[SERVER {self.pid}] Connected to {addr}.')
             start_new_thread(self.client_handler, (conn, ))
 
     def client_handler(self, conn: socket.socket):
         while True:
-            data = conn.recv(BUFF_SIZE)
+            data: bytes = conn.recv(BUFF_SIZE)
             if data:
-                msg = f'[{self.pid}] received --> {data.decode("ascii")}.'
-                print(msg)
-                # self.send_msg(msg, conn)
+                msg: str = data.decode('ascii')
+                command = msg.split(' ')[0]
+                if command == 'FLOD':
+                    self.forward(msg)
+                elif command == 'EXIT':
+                    pass
 
     def client(self):
-        print(f'[+] Peer {self.pid} is connecting to other peers...')
+        print(f'[CLIENT {self.pid}] is connecting to peers {self.peers}...')
         self.connect_to_peers()
         sleep_time = 60 - datetime.utcnow().second
         print(f'[{self.pid}] is waiting till minute ({sleep_time}s)...')
         sleep(sleep_time)
-        for conn in self.connections:
-            msg = f'FLOD {self.pid} {datetime.utcnow().now()}'
-            # msg = f'[{self.pid}] says hello!'
-            self.send_msg(msg, conn)
+        self.flood()
 
     def connect_to_peers(self) -> None:
         p: list = self.peers[:]
@@ -65,7 +65,8 @@ class Peer:
                     sock.connect((ADDRESS, BASE_PORT + pid))
                     self.connections.append(sock)
                     p.remove(pid)
-                    print(f'[+] TCP connection established to peer {pid}.')
+                    print(
+                        f'[CLIENT {self.pid}] established TCP connection to peer {pid}.')
                 except Exception as e:
                     pass
             # status_code, status_text = self.authenticate(sock)
@@ -74,6 +75,27 @@ class Peer:
             # else:
             #     print(f'[-] Failed to authenticate to peer {pid}')
             #     print(f'[*] Response: {status_text}')
+
+    def flood(self):
+        for _ in range(3):
+            for conn in self.connections:
+                flood_time = datetime.now().strftime('%H:%M:%S')
+                msg = f'FLOD {self.pid} {flood_time}'
+                self.send_msg(msg, conn)
+            sleep(SLEEP_TIME)
+
+    def forward(self, msg):
+        is_forwarded = self.forwarded_msgs.__contains__(msg)
+        if not is_forwarded:
+            print(
+                f'[{self.pid}] Received -> {msg} ==> FORWARDING\nLIST ==> {self.forwarded_msgs}')
+            for conn in self.connections:
+                self.send_msg(msg, conn)
+            self.forwarded_msgs[msg] = 1
+        else:
+            print(f'[{self.pid}] Received -> {msg} ==> NOT FORWARDING')
+            self.forwarded_msgs[msg] += 1
+            pass
 
     def authenticate(self, sock: socket.socket):
         self.send_msg(sock, 'USER username\r\n')
@@ -84,6 +106,7 @@ class Peer:
 
     def create_socket(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         return sock
 
     def send_msg(self, msg: str, sock: socket.socket):
@@ -114,6 +137,4 @@ def routine_handler(routine):
 if __name__ == '__main__':
     addr, pid = parse_args(*sys.argv)
     peer = Peer(ADDRESS, pid)
-    # start_new_thread(routine_handler, ('hello', ))
-    # start_new_thread(routine_handler, (peer.client, ))
-    pass
+    peer.run()
