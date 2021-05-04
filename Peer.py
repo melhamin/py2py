@@ -46,12 +46,12 @@ addr, peer_id = parse_args(*sys.argv)
 # Peers that this peer should connect to
 peers = get_peers2_connect(peer_id)
 
-# Create a socket
-sock = create_socket(ADDRESS, peer_id)
-sock.listen(5)
-print('[+] Server started...')
+# # Create a socket
+# sock = create_socket(ADDRESS, peer_id)
+# sock.listen(5)
+# print('[+] Server started...')
 
-while True:
-    conn, addr = sock.accept()
-    print(f'[+] Connected to {addr}')
-    start_new_thread(client_routine, (conn, ))
+# while True:
+#     conn, addr = sock.accept()
+#     print(f'[+] Connected to {addr}')
+#     start_new_thread(client_routine, (conn, ))
