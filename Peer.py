@@ -11,7 +11,7 @@ BUFF_SIZE = 512
 RES_OK = 'OK'
 RES_INVALID = 'INVALID'
 SLEEP_TIME = 5
-NUM_OF_MSGS = 3
+NUM_OF_MSGS = 2
 USERNAME = 'bilkentstu'
 PASS = 'cs421s2021'
 
@@ -58,7 +58,8 @@ class Peer:
                 msg_details = msg.split(' ')
                 req_code = msg_details[0]
                 if req_code == 'FLOD':
-                    threading.Thread(target=self.forward, args=(msg, )).start()
+                    self.forward(msg)
+                    # threading.Thread(target=self.forward, args=(msg, )).start()
                 elif req_code == 'USER':
                     if msg_details[1] == USERNAME:
                         self.send_msg(f'{RES_OK} Success\r\n', conn)
@@ -74,6 +75,7 @@ class Peer:
 
                 elif req_code == 'EXIT':
                     conn.close()
+                    break
 
     def client(self):
         """ Handles the client side of this peer.
@@ -87,7 +89,7 @@ class Peer:
         sleep(sleep_time)
         self.flood()
         self.print_stats()
-        self.close_peer_conns()
+        self.shutdown()
 
     def connect_to_peers(self) -> None:
         while len(self.peers) > 0:
@@ -101,10 +103,10 @@ class Peer:
                     self.peers.remove(pid)
                     success, status_text = self.authenticate(sock)
                     if success:
-                        print(f'[+] Authenticated to peer {pid}')
+                        print(f'Authenticated to peer {pid}')
                     else:
-                        print(f'[-] Failed to authenticate to peer {pid}')
-                        print(f'[*] Response: {status_text}')
+                        print(f'Failed to authenticate to peer {pid}')
+                        print(f'Response: {status_text}')
                 except Exception as e:
                     pass
 
@@ -131,12 +133,12 @@ class Peer:
         """
         is_forwarded = self.forwarded_msgs.__contains__(msg)
         if not is_forwarded:
-            print(f'[{self.pid}] Received -> {msg} ==> FORWARDING')
+            print(f'Received -> {msg} [FORWARD]')
             for conn in self.connections:
                 self.send_msg(msg, conn)
             self.forwarded_msgs[msg] = 1
         else:
-            print(f'[{self.pid}] Received -> {msg} ==> NOT FORWARDING')
+            print(f'Received -> {msg} [DON\'T FORWARD]')
             self.forwarded_msgs[msg] += 1
 
     def authenticate(self, sock: socket.socket):
@@ -172,8 +174,8 @@ class Peer:
             return False, status_text
         return True, status_text
 
-    def close_peer_conns(self):
-        """ Closes connection to all other peers.
+    def shutdown(self):
+        """ Closes connection to all peers.
         """
         for conn in self.connections:
             msg = 'EXIT\r\n'
@@ -220,7 +222,7 @@ class Peer:
             print(f'Message: {msg}, Count: {count}')
 
 
-def parse_args(name="default", peer_id=1, addr="127.0.1.1"):
+def parse_args(name="default", addr="127.0.1.1", peer_id=1):
     return addr, int(peer_id)
 
 
