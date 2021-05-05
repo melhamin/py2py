@@ -1,114 +1,180 @@
-from datetime import datetime
-import sys
 import socket
-from _thread import *
+import sys
 import threading
+from _thread import *
+from datetime import datetime
 from time import sleep
 
 ADDRESS = '127.0.1.1'
 BASE_PORT = 60000
-BUFF_SIZE = 256
+BUFF_SIZE = 512
 RES_OK = 'OK'
 RES_INVALID = 'INVALID'
 SLEEP_TIME = 5
+NUM_OF_MSGS = 3
+USERNAME = 'bilkentstu'
+PASS = 'cs421s2021'
 
 
 class Peer:
     def __init__(self, addr: str, pid: int) -> None:
         self.addr = addr
         self.pid = pid
-        self.peers = self.get_peers2_connect()
+        self.peers = self.get_pids()
         self.connections: list[socket.socket] = []
         self.forwarded_msgs: dict[str] = {}
 
     def run(self):
+        """ Runs the server and client side of the peer on two different threads.
+        """
         threading.Thread(target=self.server).start()
         threading.Thread(target=self.client).start()
 
     def server(self):
+        """ Handles the server side of peer.\n
+            Sever listens for incoming connection and creates
+            a new thread for each client
+        """
         sock = self.create_socket()
         address = (ADDRESS, BASE_PORT + self.pid)
         sock.bind(address)
         sock.listen(1)
-        print(f'[SERVER {self.pid}] started...')
 
         while True:
             conn, addr = sock.accept()
-            print(f'[SERVER {self.pid}] Connected to {addr}.')
-            start_new_thread(self.client_handler, (conn, ))
+            threading.Thread(target=self.client_handler, args=(conn, )).start()
 
     def client_handler(self, conn: socket.socket):
+        """ Handles requests from the given connection.
+
+            Parameters
+            ----------
+            conn: socket The TCP connection.
+        """
         while True:
             data: bytes = conn.recv(BUFF_SIZE)
             if data:
-                msg: str = data.decode('ascii')
-                command = msg.split(' ')[0]
-                if command == 'FLOD':
-                    self.forward(msg)
-                elif command == 'EXIT':
+                msg: str = data.decode('ascii').strip()
+                msg_details = msg.split(' ')
+                req_code = msg_details[0]
+                if req_code == 'FLOD':
+                    threading.Thread(target=self.forward, args=(msg, )).start()
+                elif req_code == 'USER':
+                    if msg_details[1] == USERNAME:
+                        self.send_msg(f'{RES_OK} Success\r\n', conn)
+                    else:
+                        self.send_msg(
+                            f'{RES_INVALID} Invalid username!\r\n', conn)
+                elif req_code == 'PASS':
+                    if msg_details[1] == PASS:
+                        self.send_msg(f'{RES_OK} Success\r\n', conn)
+                    else:
+                        self.send_msg(
+                            f'{RES_INVALID} Invalid password!\r\n', conn)
+
+                elif req_code == 'EXIT':
                     conn.close()
 
     def client(self):
-        print(f'[CLIENT {self.pid}] is connecting to peers {self.peers}...')
+        """ Handles the client side of this peer.
+            Connects to other peers based on the toplogy.
+            Client side floods the network every 5 seconds for 7 times.
+            Closes connections after flooding is finished.
+        """
         self.connect_to_peers()
         sleep_time = 60 - datetime.utcnow().second
-        print(f'[{self.pid}] is waiting till minute ({sleep_time}s)...')
+        print(f'Waiting till next minute ({sleep_time}s)...')
         sleep(sleep_time)
         self.flood()
         self.print_stats()
         self.close_peer_conns()
 
     def connect_to_peers(self) -> None:
-        p: list = self.peers[:]
-        while len(p) > 0:
-            for pid in p:
+        while len(self.peers) > 0:
+            for pid in self.peers:
                 sock = self.create_socket()
                 try:
                     sock.connect((ADDRESS, BASE_PORT + pid))
                     self.connections.append(sock)
-                    p.remove(pid)
                     print(
-                        f'[CLIENT {self.pid}] established TCP connection to peer {pid}.')
+                        f'TCP connection established with peer {pid}.')
+                    self.peers.remove(pid)
+                    success, status_text = self.authenticate(sock)
+                    if success:
+                        print(f'[+] Authenticated to peer {pid}')
+                    else:
+                        print(f'[-] Failed to authenticate to peer {pid}')
+                        print(f'[*] Response: {status_text}')
                 except Exception as e:
                     pass
-            # status_code, status_text = self.authenticate(sock)
-            # if status_code == RES_OK:
-            #     print(f'[+] Authenticated to peer {pid}')
-            # else:
-            #     print(f'[-] Failed to authenticate to peer {pid}')
-            #     print(f'[*] Response: {status_text}')
 
     def flood(self):
-        for _ in range(3):
+        """ Sends the peer's id with timestamp to all
+            of the connected peers after every 5 seconds
+        """
+        for _ in range(NUM_OF_MSGS):
             for conn in self.connections:
-                print(conn.getsockname())
                 flood_time = datetime.now().strftime('%H:%M:%S')
                 msg = f'FLOD {self.pid} {flood_time}'
                 self.send_msg(msg, conn)
-                self.forwarded_msgs[msg] = 1
+                self.forwarded_msgs[msg] = 0
             sleep(SLEEP_TIME)
 
-    def forward(self, msg):
+    def forward(self, msg: str):
+        """ Forwards the given message to all peers (if not already forwarded).
+            If message is already forwarded, it increments its counter in the
+            forwarded messages list.
+
+            Parameters
+            ----------
+            msg: str -> The message to be forwarded.
+        """
         is_forwarded = self.forwarded_msgs.__contains__(msg)
         if not is_forwarded:
-            print(
-                f'[{self.pid}] Received -> {msg} ==> FORWARDING\nLIST ==> {self.forwarded_msgs}')
+            print(f'[{self.pid}] Received -> {msg} ==> FORWARDING')
             for conn in self.connections:
                 self.send_msg(msg, conn)
             self.forwarded_msgs[msg] = 1
         else:
             print(f'[{self.pid}] Received -> {msg} ==> NOT FORWARDING')
             self.forwarded_msgs[msg] += 1
-            pass
 
     def authenticate(self, sock: socket.socket):
-        self.send_msg(sock, 'USER username\r\n')
+        """ Authenticates to the peer of the given connection.
+
+            Parameters
+            ----------
+            sock: socket -> Peer connection.            
+
+            Returns
+            -------
+            True, status_text: -> On success.
+            False, status_text: -> On failure.                                                
+        """
+        self.send_msg(f'USER {USERNAME}\r\n', sock)
         response = sock.recv(BUFF_SIZE)
-        response = response.rstrip()
-        status_code, status_text = response.split(" ")
-        return status_code, status_text
+        response = response.decode().strip()
+        index = response.index(' ')
+        status_code = response[: index]
+        status_text = response[index:]
+
+        if status_code != RES_OK:
+            return False, status_text
+
+        self.send_msg(f'PASS {PASS}\r\n', sock)
+        response = sock.recv(BUFF_SIZE)
+        response = response.decode().strip()
+        index = response.index(' ')
+        status_code = response[: index]
+        status_text = response[index:]
+
+        if status_code != RES_OK:
+            return False, status_text
+        return True, status_text
 
     def close_peer_conns(self):
+        """ Closes connection to all other peers.
+        """
         for conn in self.connections:
             msg = 'EXIT\r\n'
             self.send_msg(msg, conn)
@@ -120,10 +186,23 @@ class Peer:
         return sock
 
     def send_msg(self, msg: str, sock: socket.socket):
+        """ Sends the given message through the given connection.
+
+            Parameters
+            ----------
+            msg: str -> Message to be sent.
+            sock: socket -> The connection.
+        """
         msg = msg.encode('ascii')
         sock.sendall(msg)
 
-    def get_peers2_connect(self):
+    def get_pids(self):
+        """ Parses the peer ids from the toplogy that this peer should initiate a TCP connection with.
+
+            Return
+            ------
+            peers: list -> Ids of peers.
+        """
         peers = []
         with open('topology.txt', 'r') as f:
             # Number of peers
