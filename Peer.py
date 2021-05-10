@@ -29,14 +29,15 @@ class Peer:
         """ 
         Runs the server as the main thread and client in a new thread.
         """
+        threading.Thread(target=self.server).start()
         threading.Thread(target=self.client).start()
-        self.server()
+        # self.server()
 
     def server(self):
         """ 
         Handles the server side of peer.\n
         Sever listens for incoming connection and creates
-        a new thread for each client
+        a new thread for each client.
         """
         sock = self.create_socket()
         address = (ADDRESS, BASE_PORT + self.pid)
@@ -87,15 +88,15 @@ class Peer:
         Client side floods the network every 5 seconds for 7 times.
         Closes connections after flooding is finished.
         """
-        self.connect_to_peers()
         sleep_time = 60 - datetime.utcnow().second
+        self.connect_to_peers(sleep_time)
         print(f'Waiting till next minute ({sleep_time}s)...')
         sleep(sleep_time)
         self.flood()
         self.shutdown()
         self.print_stats()
 
-    def connect_to_peers(self) -> None:
+    def connect_to_peers(self, sleep_time) -> None:
         """
         Connects and authenticates to the peers with peer ids 
         extracted from the topology.
@@ -103,12 +104,15 @@ class Peer:
         After an attempt to connect and authenticate, the peer
         id is removed from the list of peers
         """
-
+        last_sec_to_try = 2
         while len(self.peers) > 0:
             for pid in self.peers:
                 sock = self.create_socket()
                 try:
-                    sock.connect((ADDRESS, BASE_PORT + pid))
+                    res = sock.connect_ex((ADDRESS, BASE_PORT + pid))
+                    if res != 0:
+                        print("[RES] ------> " + str(res))
+                        break
                     self.connections.append(sock)
                     print(
                         f'TCP connection established with peer {pid}.')
@@ -120,7 +124,15 @@ class Peer:
                         print(f'Response: {status_text}')
                     self.peers.remove(pid)
                 except Exception as e:
-                    self.peers.remove(pid)
+                    print("[EXCEPTION ] -------------")
+                    pass
+                    # self.peers.remove(pid)
+
+            # Retry to connect to the peers that are not
+            # up until 2 seconds before the next minute mark
+            last_sec_to_try -= 1
+            if last_sec_to_try <= 0:
+                break
 
     def flood(self):
         """ 
@@ -128,13 +140,10 @@ class Peer:
         of the connected peers after every 5 seconds
         """
         for _ in range(NUM_OF_MSGS):
+            flood_time = datetime.now().strftime('%H:%M:%S')
             for conn in self.connections:
-                flood_time = datetime.now().strftime('%H:%M:%S')
                 msg = f'FLOD {self.pid} {flood_time}'
                 self.send_msg(msg, conn)
-                # self.lock.acquire(blocking=True)
-                self.forwarded_msgs[msg] = 0
-                # self.lock.release()
             sleep(SLEEP_TIME)
 
     def forward(self, msg: str):
@@ -149,19 +158,19 @@ class Peer:
         """
         self.lock.acquire(blocking=True)
         is_forwarded = self.forwarded_msgs.__contains__(msg)
+        self.lock.release()
         if not is_forwarded:
             print(f'Received -> {msg} [FORWARD]')
             for conn in self.connections:
                 self.send_msg(msg, conn)
-            # self.lock.acquire(blocking=True)
+            self.lock.acquire(blocking=True)
             self.forwarded_msgs[msg] = 1
-            # self.lock.release()
+            self.lock.release()
         else:
             print(f'Received -> {msg} [DON\'T FORWARD]')
-            # self.lock.acquire(blocking=True)
+            self.lock.acquire(blocking=True)
             self.forwarded_msgs[msg] += 1
-            # self.lock.release()
-        self.lock.release()
+            self.lock.release()
 
     def authenticate(self, sock: socket.socket):
         """ 
@@ -223,8 +232,11 @@ class Peer:
         msg: str -> Message to be sent.
         sock: socket -> The connection.
         """
-        msg = msg.encode('ascii')
-        sock.sendall(msg)
+        try:
+            msg = msg.encode('ascii')
+            sock.sendall(msg)
+        except Exception as e:
+            print("Failed to send message to peer")
 
     def get_pids(self):
         """ 
